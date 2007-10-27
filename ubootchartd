@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# To save writting a config file parser, we just use
+# the shell to set environment variables that we
+# can read.
+. /etc/ubootchart/ubootchart.conf
+
+####################################################
+# Now start capturing the stats:
+####################################################
+/sbin/ubootchartd_bin &
+sleep 1
+exec $init_prog
+
