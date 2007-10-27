@@ -1,5 +1,4 @@
 CFLAGS = -O3
-prefix ?= /usr/local
 
 .c.o:
 	$(CC) -Wall $(CFLAGS) -c $*.c
@@ -16,7 +15,6 @@ install: ubootchartd_bin
 	install -m 0644 ubootchart.conf ${prefix}/etc/ubootchart
 	install -m 0755 start.sh ${prefix}/etc/ubootchart
 	install -m 0755 finish.sh ${prefix}/etc/ubootchart
-	install -m 0644 README.txt ${prefix}/doc/ubootchart
 
 clean:
 	rm -f *.o ubootchartd_bin
