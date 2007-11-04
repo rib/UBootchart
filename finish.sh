@@ -1,36 +1,39 @@
 #!/bin/sh
 
-VERSION=0.8
-
 echo "ubootchart: finished...."
-echo "ubootchart: Copylog data to /var/log/ubootchart"
+echo "ubootchart: Copylog data to $log_dir"
 
-if ! test -d /var/log/ubootchart; then
-    mkdir -p /var/log/ubootchart
+
+if ! test -d $log_dir; then
+    mkdir -p $log_dir
+    if test $? -ne 0; then
+        echo "Failed to create $log_dir"
+        exit 1
+    fi
 fi
 
 # Log some basic information about the system.
 (
-    echo "version = $VERSION"
+    echo "version = $version"
     echo "title = Boot chart for $( hostname | sed q ) ($( date ))"
     echo "system.uname = $( uname -srvm | sed q )"
-    if [ -f /etc/gentoo-release ]; then
+    if test -f /etc/gentoo-release; then
             echo "system.release = $( sed q /etc/gentoo-release )"
-    elif [ -f /etc/SuSE-release ]; then
+    elif test -f /etc/SuSE-release; then
             echo "system.release = $( sed q /etc/SuSE-release )"
-    elif [ -f /etc/debian_version ]; then
+    elif test -f /etc/debian_version; then
             echo "system.release = Debian GNU/$( uname -s ) $( cat /etc/debian_version )"
-    elif [ -f /etc/frugalware-release ]; then
+    elif test -f /etc/frugalware-release; then
             echo "system.release = $( sed q /etc/frugalware-release )"
-    elif [ -f /etc/pardus-release ]; then
+    elif test -f /etc/pardus-release; then
             echo "system.release = $( sed q /etc/pardus-release )"
     else
             echo "system.release = $( sed 's/\\.//g;q' /etc/issue )"
     fi
 
     # Get CPU count
-    local cpucount=$(grep -c '^processor' /proc/cpuinfo)
-    if [ $cpucount -gt 1 -a -n "$(grep 'sibling.*2' /proc/cpuinfo)" ]; then
+    cpucount=$(grep -c '^processor' /proc/cpuinfo)
+    if test $cpucount -gt 1 -a -n "$(grep 'sibling.*2' /proc/cpuinfo)"; then
             # Hyper-Threading enabled
             cpucount=$(( $cpucount / 2 ))
     fi
@@ -46,11 +49,15 @@ fi
 ) >> header
 
 
-#rm -f /var/log/ubootchart/*
-cp * /var/log/ubootchart
-cd /var/log/ubootchart
+kernel_pacct=""
+if test -f kernel_pacct; then
+	kernel_pacct="kernel_pacct"
+fi
 
-echo "ubootchart: creating /var/log/ubootchart/bootchart.tgz"
-tar -zcf bootchart.tgz header kernel_pacct *.log
+cp header $kernel_pacct *.log $log_dir
+cd $log_dir
+
+echo "ubootchart: creating $log_dir/bootchart.tgz"
+tar -zcf bootchart.tgz header $kernel_pacct *.log
 
 
