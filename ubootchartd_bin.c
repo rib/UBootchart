@@ -29,48 +29,68 @@
 #include <string.h>
 #include <time.h>
 
+/* If DEBUG enabled then print to stdout as well as
+ * error.log */
+#if defined(DEBUG)
+#define PRINTF(ARGS...) printf(ARGS)
+#else
+#define PRINTF(ARGS...)
+#endif
 
 static FILE *error_log;
-#define UB_PRINT(MSG...) fprintf(error_log, "ubootchart: " MSG)
+#define UB_PRINT(MSG...) \
+    do{ \
+	PRINTF("ubootchart: " MSG); \
+	if(error_log) { \
+	    fprintf(error_log, "ubootchart: " MSG); \
+	} \
+    }while(0)
 #define UB_PERROR(MSG) \
     do{ \
+	PRINTF("ubootchart: " MSG ": %s func=%s,line=%u\n", \
+		error_str, __FUNCTION__, __LINE__ ); \
+	if(error_log) { \
 	const char *error_str = strerror(errno); \
-	fprintf(error_log, "ubootchart: " MSG ": %s\n", error_str); \
+	fprintf(error_log, "ubootchart: " MSG ": %s func=%s,line=%u\n", \
+		error_str, __FUNCTION__, __LINE__ ); \
+	} \
     }while(0)
 
 #define TRUE 1
 #define FALSE 0
 
+typedef struct _Buffer
+{
+    char *buf;
+    unsigned int size;
+    unsigned int space;
+}Buffer;
+
 typedef struct _UBootChartState
 {
-    struct {
+    struct _config{
 	char *init_prog;
 	char *start_script;
 	char *finish_script;
 	char *log_dir;
-	unsigned int probe_period;
+	char *tmpfs_lazy_mnt_dir;
+	unsigned int probe_interval;
 	unsigned int proc_stat_log_buf_size;
 	unsigned int proc_diskstats_log_buf_size;
 	unsigned int proc_ps_log_buf_size;
     }config;
 
-    struct {
+    struct _proc{
 	int stat_fd;
 	int diskstats_fd;
 	int uptime_fd;
     }proc;
 
-    struct {
-
-	char *proc_stat_buf;
-	char *proc_diskstats_buf;
-	char *proc_ps_buf;
-	char *kernel_pacct_buf;
-	unsigned int proc_stat_buf_pos;
-	unsigned int proc_diskstats_buf_pos;
-	unsigned int proc_ps_buf_pos;
-	unsigned int kernel_pacct_buf_pos;
-    }logs;
+    struct _buffers{
+	Buffer proc_stat;
+	Buffer proc_diskstats;
+	Buffer proc_ps;
+    }buffers;
 }UBootChartState;
 
 
@@ -89,7 +109,8 @@ read_config_string(const char *key, const char *default_value)
     }
     else
     {
-	ret = strdup(default_value);
+	if(default_value)
+	    ret = strdup(default_value);
     }
     return ret;
 }
@@ -119,20 +140,20 @@ read_config(UBootChartState *state)
 {
     state->config.init_prog =
 	read_config_string("init_prog", "/sbin/init");
-    state->config.start_script = read_config_string("start_script",
-						  "/etc/ubootchart/start.sh");
-    state->config.finish_script = read_config_string("finish_script",
-						   "/etc/ubootchart/finish.sh");
+    state->config.start_script = read_config_string("start_script", NULL);
+    state->config.finish_script = read_config_string("finish_script", NULL);
     state->config.log_dir = read_config_string("log_dir",
 					     "/var/log/ubootchart");
+    state->config.tmpfs_lazy_mnt_dir = read_config_string("tmpfs_lazy_mnt_dir",
+							  NULL);
 
-    state->config.probe_period = read_config_uint("probe_period", 1000);
+    state->config.probe_interval = read_config_uint("probe_interval", 200);
     state->config.proc_stat_log_buf_size =
-	read_config_uint("proc_stat_log_buf_size", (200*1024));
+	read_config_uint("proc_stat_log_buf_size", 51200);
     state->config.proc_diskstats_log_buf_size =
-	read_config_uint("proc_diskstats_log_buf_size", (500*1024));
+	read_config_uint("proc_diskstats_log_buf_size", 409600);
     state->config.proc_ps_log_buf_size =
-	read_config_uint("proc_ps_log_buf_size", (2*1024*1024));
+	read_config_uint("proc_ps_log_buf_size", 1638400);
 }
 
 
@@ -140,7 +161,10 @@ static void
 run_start_script(UBootChartState *state)
 {
     int status;
-
+    
+    if(!state->config.start_script)
+	return;
+	
     status = system(state->config.start_script);
     if(status == -1)
     {
@@ -155,33 +179,37 @@ run_start_script(UBootChartState *state)
 #ifndef MNT_DETACH
 #define MNT_DETACH 0x02
 #endif
-/* FIXME - make this a config option */
-#define TMPFS_MNT_DIR "/mnt"
 static void
 enter_tmpfs_dir(UBootChartState *state)
 {
     int status;
+    
+    if(!state->config.tmpfs_lazy_mnt_dir)
+	return;
 
-    status =
-	mount("none", TMPFS_MNT_DIR, "tmpfs", MS_NOATIME|MS_NODIRATIME, NULL);
+    status = mount("none",
+		   state->config.tmpfs_lazy_mnt_dir,
+		   "tmpfs",
+		   MS_NOATIME|MS_NODIRATIME,
+		   NULL);
     if(status == -1)
     {
-	UB_PERROR("Failed to mount tmpfs @ " TMPFS_MNT_DIR);
+	UB_PERROR("Failed to mount tmpfs");
     }
-    status = chdir(TMPFS_MNT_DIR);
+    status = chdir(state->config.tmpfs_lazy_mnt_dir);
     if(status == -1)
     {
-	UB_PERROR("Failed to enter tmpfs @ " TMPFS_MNT_DIR);
+	UB_PERROR("Failed to enter tmpfs");
     }
 
     /* FIXME - make this a config option (handy for debugging
      * since we don't want to loose the error log if ubootchartd_bin
      * crashes) - note you wouldn't use /mnt if not lazy unmounting
      */
-    status = umount2(TMPFS_MNT_DIR, MNT_FORCE|MNT_DETACH);
+    status = umount2(state->config.tmpfs_lazy_mnt_dir, MNT_FORCE|MNT_DETACH);
     if(status == -1)
     {
-	UB_PERROR("Failed to lazy unmount tmpfs @ " TMPFS_MNT_DIR);
+	UB_PERROR("Failed to lazy unmount tmpfs");
     }
 }
 
@@ -224,7 +252,10 @@ get_current_uptime(int uptime_fd, int *uptime_len)
 
     /* FIXME - can we just use gettimeofday here?
      * - Need to look at the bootchart scripts to see how
-     *   they interpret this. */
+     *   they interpret this. 
+     * - At least we should only need to read this once
+     *   at startup and from that point we can use gettimeofday
+     */
 
     len = sizeof(buf);
     while(len!=0 && (ret = read(uptime_fd, bufp, len)) != 0)
@@ -269,27 +300,38 @@ get_current_uptime(int uptime_fd, int *uptime_len)
     return buf;
 }
 
+static int
+extend_buffer(Buffer *buffer, const char *log_name)
+{
+    buffer->buf = realloc(buffer->buf, buffer->size*2);
+    if(!buffer->buf)
+    {
+	UB_PRINT("Failed to realloc memory for log buffer\n");
+	return FALSE;
+    }
+    buffer->space += buffer->size;
+    buffer->size *= 2;
+
+    UB_PRINT("Warning we had to resize the buffer for %s to %u bytes. "
+	     "Suggest you update your ubootchart.conf\n",
+	     log_name, buffer->size);
+    return TRUE;
+}
+
 
 static void
 read_proc_to_buffer(int proc_fd,
-		    char *buf,
-		    unsigned int *pos,
-		    unsigned int size,
+		    Buffer *buffer,
 		    char *log_name)
 {
-    unsigned int len;
-    int ret;
+    char *buf = buffer->buf;
+    unsigned int size = buffer->size;
+    unsigned int space = buffer->space;
+    int ret=0;
 
-    buf+=*pos;
-    if(*pos > size)
-    {
-	UB_PRINT("BUG: file=%s, pos=%u, size=%u\n",
-		 log_name,
-		 (unsigned int)*pos,
-		 (unsigned int)size);
-    }
-    len=size - *pos;
-    while(len!=0 && (ret = read(proc_fd, buf, len)) != 0)
+    buf += (size - space);
+    
+    while((ret = read(proc_fd, buf, space)) != 0)
     {
 	if(ret == -1)
 	{
@@ -298,36 +340,27 @@ read_proc_to_buffer(int proc_fd,
 		continue;
 	    }
 	    UB_PERROR("Failed to read proc entry");
-	    UB_PRINT("> file=%s, size=%u, pos=%u\n",
-		     log_name,
-		     (unsigned int)size,
-		     (unsigned int)*pos);
+	    UB_PRINT("> file=%s, size=%u, space=%u\n",
+		     log_name, size, space);
 	    return;
 	}
-	len -= ret;
+	space -= ret;
 	buf += ret;
-    }
-    *pos=size-len;
-    //UB_PRINT("size=%u len=%u for %s\n",(unsigned int)size,(unsigned int)len,log_name);
-    if(*pos > size)
-    {
-	UB_PRINT("BUG2: file=%s, pos=%u, size=%u len%u\n",
-		 log_name,
-		 (unsigned int)*pos,
-		 (unsigned int)size,
-		 (unsigned int)len);
-    }
 
-    if(ret != 0)
-    {
-	UB_PRINT("Ran out of space in the accumulation buffer for %s!\n",
-		 log_name);
-	UB_PRINT("> size=%u, pos=%u len=%u\n",
-		 (unsigned int)size,
-		 (unsigned int)*pos,
-		 (unsigned int)len
-		);
+	if(space == 0)
+	{
+	    buffer->space = space;
+	    if(!extend_buffer(buffer, log_name))
+	    {
+		break;
+	    }
+	    buf = buffer->buf;
+	    space = buffer->space;
+	    size = buffer->size;
+	    buf += (size - space);
+	}
     }
+    buffer->space = space;
 }
 
 
@@ -371,9 +404,7 @@ log_process_stat_files(UBootChartState *state)
 	    }
 
 	    read_proc_to_buffer(current_stat_fd,
-				state->logs.proc_ps_buf,
-				&state->logs.proc_ps_buf_pos,
-				state->config.proc_ps_log_buf_size,
+				&state->buffers.proc_ps,
 				current_stat_file);
 
 	    /* close the stat file */
@@ -390,24 +421,22 @@ log_process_stat_files(UBootChartState *state)
 
 
 static void
-append_uptime_to_log_buffer(char *buf,
-			    unsigned int *pos,
-			    unsigned int size,
+append_uptime_to_log_buffer(Buffer *buffer,
 			    const char *uptime,
 			    int uptime_len,
 			    const char *log_name)
 {
-    if((size - *pos) > uptime_len)
+    char *buf;
+    
+    if(buffer->space < uptime_len)
     {
-	memcpy(buf + *pos, uptime, uptime_len);
-	*pos+=uptime_len;
+	if(!extend_buffer(buffer, log_name))
+	    return;
     }
-    else
-    {
-	UB_PRINT("Writing uptime: "
-		 "Ran out of space in the accumulation buffer for %s!\n",
-		 log_name);
-    }
+    buf = buffer->buf;
+    buf += (buffer->size - buffer->space);
+    memcpy(buf, uptime, uptime_len);
+    buffer->space -= uptime_len;
 }
 
 
@@ -416,22 +445,18 @@ do_system_probe(UBootChartState *state)
 {
     int offset;
     const char *uptime;
-    int uptime_len;
+    int uptime_len=0;
 
     //UB_PRINT("System Probe!\n");
 
     uptime = get_current_uptime(state->proc.uptime_fd, &uptime_len);
 
 
-    append_uptime_to_log_buffer(state->logs.proc_stat_buf,
-				&state->logs.proc_stat_buf_pos,
-				state->config.proc_stat_log_buf_size,
+    append_uptime_to_log_buffer(&state->buffers.proc_stat,
 				uptime, uptime_len,
 				"proc_stat.log");
     read_proc_to_buffer(state->proc.stat_fd,
-			state->logs.proc_stat_buf,
-			&state->logs.proc_stat_buf_pos,
-			state->config.proc_stat_log_buf_size,
+			&state->buffers.proc_stat,
 			"proc_stat.log");
     offset=lseek(state->proc.stat_fd, 0, SEEK_SET);
     if(offset == -1)
@@ -440,15 +465,11 @@ do_system_probe(UBootChartState *state)
     }
 
 
-    append_uptime_to_log_buffer(state->logs.proc_diskstats_buf,
-				&state->logs.proc_diskstats_buf_pos,
-				state->config.proc_diskstats_log_buf_size,
+    append_uptime_to_log_buffer(&state->buffers.proc_diskstats,
 				uptime, uptime_len,
 				"proc_diskstats.log");
     read_proc_to_buffer(state->proc.diskstats_fd,
-			state->logs.proc_diskstats_buf,
-			&state->logs.proc_diskstats_buf_pos,
-			state->config.proc_diskstats_log_buf_size,
+			&state->buffers.proc_diskstats,
 			"proc_diskstats.log");
     offset=lseek(state->proc.diskstats_fd, 0, SEEK_SET);
     if(offset == -1)
@@ -456,9 +477,7 @@ do_system_probe(UBootChartState *state)
 	UB_PERROR("Failed to seek back to the start of proc_diskstats.log");
     }
 
-    append_uptime_to_log_buffer(state->logs.proc_ps_buf,
-				&state->logs.proc_ps_buf_pos,
-				state->config.proc_ps_log_buf_size,
+    append_uptime_to_log_buffer(&state->buffers.proc_ps,
 				uptime, uptime_len,
 				"proc_ps.log");
     log_process_stat_files(state);
@@ -470,29 +489,29 @@ do_system_probe(UBootChartState *state)
 static void
 alloc_log_buffers(UBootChartState *state)
 {
-    state->logs.proc_stat_buf =
-	malloc(state->config.proc_stat_log_buf_size);
-    if(!state->logs.proc_stat_buf)
+    state->buffers.proc_stat.size = state->config.proc_stat_log_buf_size;
+    state->buffers.proc_stat.buf = malloc(state->buffers.proc_stat.size);
+    if(!state->buffers.proc_stat.buf)
     {
 	UB_PRINT("Not enough mem for proc_stat.log accumulation buffer\n");
     }
-    state->logs.proc_stat_buf_pos=0;
-
-    state->logs.proc_diskstats_buf =
-	malloc(state->config.proc_diskstats_log_buf_size);
-    if(!state->logs.proc_diskstats_buf)
+    state->buffers.proc_stat.space=state->buffers.proc_stat.size;
+    
+    state->buffers.proc_diskstats.size = state->config.proc_diskstats_log_buf_size;
+    state->buffers.proc_diskstats.buf = malloc(state->buffers.proc_diskstats.size);
+    if(!state->buffers.proc_diskstats.buf)
     {
 	UB_PRINT("Not enough mem for proc_diskstats.log accumulation buffer\n");
     }
-    state->logs.proc_diskstats_buf_pos=0;
+    state->buffers.proc_diskstats.space=state->buffers.proc_diskstats.size;
 
-    state->logs.proc_ps_buf =
-	malloc(state->config.proc_ps_log_buf_size);
-    if(!state->logs.proc_ps_buf)
+    state->buffers.proc_ps.size = state->config.proc_ps_log_buf_size;
+    state->buffers.proc_ps.buf = malloc(state->buffers.proc_ps.size);
+    if(!state->buffers.proc_ps.buf)
     {
 	UB_PRINT("Not enough mem for proc_ps.log accumulation buffer\n");
     }
-    state->logs.proc_ps_buf_pos=0;
+    state->buffers.proc_ps.space=state->buffers.proc_ps.size;
 }
 
 
@@ -523,6 +542,15 @@ static void
 start_process_accounting(void)
 {
     int ret;
+
+    ret = creat("./kernel_pacct", S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
+    if(ret == -1)
+    {
+	UB_PERROR("Failed to create ./kernel_pacct");
+	return;
+    }
+    close(ret);
+
     ret = acct("kernel_pacct");
     if(ret == -1)
     {
@@ -549,10 +577,13 @@ run_finish_script(UBootChartState *state)
 {
     int status;
 
+    if(!state->config.finish_script)
+	return;
+
     status = system(state->config.finish_script);
     if(status == -1)
     {
-	UB_PERROR("Failed to run start script");
+	UB_PERROR("Failed to run finish script");
     }
 }
 
@@ -570,10 +601,11 @@ close_file(int fd)
 
 
 static void
-write_buffer_to_log(int log_fd, char *buf, unsigned int len)
+write_buffer_to_log(int log_fd, Buffer *buffer)
 {
     int ret;
-    ret = write(log_fd, buf, len);
+    int len = buffer->size - buffer->space;
+    ret = write(log_fd, buffer->buf, len);
     if(ret == -1)
     {
 	UB_PERROR("Failed to write log");
@@ -600,9 +632,7 @@ write_log_files(UBootChartState *state)
     {
 	UB_PERROR("Failed to open proc_stat.log");
     }
-    write_buffer_to_log(proc_stat_log_fd,
-			state->logs.proc_stat_buf,
-			state->logs.proc_stat_buf_pos);
+    write_buffer_to_log(proc_stat_log_fd, &state->buffers.proc_stat);
 
     proc_diskstats_log_fd =
 	open("proc_diskstats.log",
@@ -612,9 +642,7 @@ write_log_files(UBootChartState *state)
     {
 	UB_PERROR("Failed to open proc_diskstats.log");
     }
-    write_buffer_to_log(proc_diskstats_log_fd,
-			state->logs.proc_diskstats_buf,
-			state->logs.proc_diskstats_buf_pos);
+    write_buffer_to_log(proc_diskstats_log_fd, &state->buffers.proc_diskstats);
 
     proc_ps_log_fd =
 	open("proc_ps.log",
@@ -624,11 +652,8 @@ write_log_files(UBootChartState *state)
     {
 	UB_PERROR("Failed to open proc_ps.log");
     }
-    write_buffer_to_log(proc_ps_log_fd,
-			state->logs.proc_ps_buf,
-			state->logs.proc_ps_buf_pos);
-
-
+    write_buffer_to_log(proc_ps_log_fd, &state->buffers.proc_ps);
+    
     close_file(state->proc.stat_fd);
     close_file(state->proc.diskstats_fd);
 
@@ -644,25 +669,22 @@ main(int argc, char **argv)
     UBootChartState state;
     struct timespec delay;
     
-    /* We may as well account for our own junk */
-    start_process_accounting();
-    
     read_config(&state);
     enter_tmpfs_dir(&state);
     open_error_log(&state);
+    start_process_accounting();
     run_start_script(&state);
     register_sigusr1_handler();
     alloc_log_buffers(&state);
     open_proc_files(&state);
     
-    delay.tv_sec=0;
-    delay.tv_nsec=state.config.probe_period*1000000;
+    delay.tv_sec=state.config.probe_interval/1000;
+    delay.tv_nsec=(state.config.probe_interval%1000)*1000000;
     while(1)
     {
 	if(sigusr1_recieved)
-	{
 	    break;
-	}
+	
 	nanosleep(&delay, NULL);
 	do_system_probe(&state);
     }

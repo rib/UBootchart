@@ -1,5 +1,7 @@
 #!/bin/sh
 
+export version=r14
+
 # To save writting a config file parser, we just use
 # the shell to set environment variables that we
 # can read.
@@ -9,6 +11,5 @@
 # Now start capturing the stats:
 ####################################################
 /sbin/ubootchartd_bin &
-sleep 1
 exec $init_prog
 
