@@ -1,13 +1,17 @@
 DESCRIPTION = "A boot profiling tool"
 HOMEPAGE = "http://code.google.com/p/ubootchart/"
 LICENSE="GPLv3"
-PR = "r19"
+PR = "r20"
 
 SRC_URI = "file://ubootchartd_bin.c \
             file://ubootchartd \
 	    file://ubootchart.conf \
             file://start.sh \
             file://finish.sh"
+
+do_patch() {
+    sed -i "s/@VERSION@/${PR}/" ${WORKDIR}/ubootchartd
+}
 
 do_compile() {
         ${CC} ${CFLAGS} ${LDFLAGS} ${LIBS} ${INCLUDES} ${WORKDIR}/ubootchartd_bin.c -o ubootchartd_bin
