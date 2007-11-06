@@ -1,7 +1,7 @@
 DESCRIPTION = "A boot profiling tool"
 HOMEPAGE = "http://code.google.com/p/ubootchart/"
 LICENSE="GPLv3"
-PR = "r18"
+PR = "r19"
 
 SRC_URI = "file://ubootchartd_bin.c \
             file://ubootchartd \

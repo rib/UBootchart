@@ -1,15 +1,17 @@
 #!/bin/sh
 
-export version=r14
+export version="@VERSION@"
 
 # To save writting a config file parser, we just use
 # the shell to set environment variables that we
 # can read.
 . /etc/ubootchart/ubootchart.conf
 
-####################################################
-# Now start capturing the stats:
-####################################################
-/sbin/ubootchartd_bin &
-exec $init_prog
+if [ $$ -eq 1 ]; then
+  ####################################################
+  # Now start capturing the stats:
+  ####################################################
+  /sbin/ubootchartd_bin &
+fi
 
+exec $init_prog "$@"
