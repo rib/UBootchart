@@ -9,7 +9,7 @@ S = "${WORKDIR}/trunk"
 
 
 do_patch() {
-    sed -i "s/@VERSION@/${PR}/" ${S}/ubootchartd
+    sed -i "s/@VERSION@/${PV}-${PR}/" ${S}/ubootchartd
 }
 
 do_compile() {

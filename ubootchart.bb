@@ -1,7 +1,7 @@
 DESCRIPTION = "A boot profiling tool"
 HOMEPAGE = "http://code.google.com/p/ubootchart/"
 LICENSE="GPLv3"
-PR = "r20"
+PR = "r21"
 
 SRC_URI = "file://ubootchartd_bin.c \
             file://ubootchartd \
@@ -10,7 +10,7 @@ SRC_URI = "file://ubootchartd_bin.c \
             file://finish.sh"
 
 do_patch() {
-    sed -i "s/@VERSION@/${PR}/" ${WORKDIR}/ubootchartd
+    sed -i "s/@VERSION@/${PV}-${PR}/" ${WORKDIR}/ubootchartd
 }
 
 do_compile() {
