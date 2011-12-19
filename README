@@ -1,0 +1,13 @@
+
+Quick notes on how to use the chart renderer from http://bootchart.org.
+
+Checkout source:
+svn co https://bootchart.svn.sourceforge.net/svnroot/bootchart/trunk/bootchart
+
+Build the chart generator:
+$ cd bootchart
+$ ant
+
+Generate your chart:
+$ java -cp build org.bootchart.Main bootchart.tgz
+
